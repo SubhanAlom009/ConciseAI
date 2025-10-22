@@ -6,7 +6,7 @@ import { Button } from "../ui/button";
 import { z } from "zod";
 import { useUploadThing } from "@/utils/uploadthing";
 import { toast } from "sonner";
-import { generatePdfSummary, storePdfSummary } from "@/actions/uploadActions";
+import { generatePdfSummary } from "@/actions/uploadActions";
 import { useRouter } from "next/navigation";
 
 function UploadPDFForm({
@@ -71,63 +71,125 @@ function UploadPDFForm({
       );
       return;
     }
-    // Upload the file using UploadThing
-    const resp = await startUpload([file]);
-    if (!resp || resp.length === 0) {
-      toast.error("Upload failed. Please try again.");
-      return;
-    }
-
-    const summaryToastId = toast.loading("Generating PDF summary...", {
-      id: "summary",
-    });
 
     try {
-      const summary = await generatePdfSummary(resp);
-      console.log("PDF Summary:", summary);
-      toast.success("PDF summary generated successfully!", {
-        id: summaryToastId,
-      });
-      const { data, message } = summary;
+      // Upload the file using UploadThing
+      const resp = await startUpload([file]);
 
-      if (data) {
-        toast.loading("Saving summary to database...", {
-          id: "saveSummary",
+      console.log("Upload response:", resp);
+      console.log("Upload response type:", typeof resp);
+      console.log("Upload response[0]:", resp?.[0]);
+      console.log("Available keys:", resp?.[0] ? Object.keys(resp[0]) : "none");
+
+      if (!resp || resp.length === 0) {
+        toast.error("Upload failed. Please try again.");
+        setIsUploading(false);
+        return;
+      }
+
+      // UploadThing v7+ uses serverData, older versions may use different structure
+      const uploadData = resp[0] as any;
+
+      // Try to extract serverData from various possible locations
+      let extractedData = uploadData.serverData || uploadData;
+
+      // UploadThing might return data with different property names
+      const fileUrl =
+        extractedData.fileUrl || extractedData.url || uploadData.url;
+      const fileName =
+        extractedData.fileName || extractedData.name || uploadData.name;
+      const userId = extractedData.userId || uploadData.userId;
+
+      console.log("Extracted data:", { fileUrl, fileName, userId });
+      console.log("Full uploadData:", uploadData);
+      console.log("Extracted serverData:", extractedData);
+
+      // Validate required fields
+      if (!fileUrl || !fileName) {
+        console.error("Invalid server data structure:", {
+          uploadData,
+          extractedData,
+          extractedFileUrl: fileUrl,
+          extractedFileName: fileName,
+        });
+        toast.error("Upload completed but required data is missing.");
+        setIsUploading(false);
+        return;
+      }
+
+      // Create normalized serverData object for use below
+      const serverData = { fileUrl, fileName, userId };
+
+      const summaryToastId = toast.loading("Generating PDF summary...", {
+        id: "summary",
+      });
+
+      try {
+        // Pass normalized data structure to generatePdfSummary
+        const normalizedResponse = [{ serverData }];
+        const summary = await generatePdfSummary(normalizedResponse);
+        console.log("PDF Summary:", summary);
+
+        if (!summary.success) {
+          toast.error(summary.message || "Failed to generate summary", {
+            id: summaryToastId,
+          });
+          return;
+        }
+
+        toast.success("PDF summary generated successfully!", {
+          id: summaryToastId,
         });
 
-        if (data.summary) {
-          // save it to databse or handle it as needed
-          let storeResult = await storePdfSummary({
-            fileName: resp[0].serverData.fileName,
-            fileUrl: resp[0].serverData.fileUrl,
+        const { data } = summary;
+
+        if (data && data.summary) {
+          // Prepare data for the summary page (no database storage)
+          const summaryData = {
             title: data.title,
             summary: data.summary,
-          });
+            parsedContent: data.parsedContent || "", // Include parsed PDF text
+            fileName: serverData.fileName,
+            fileUrl: serverData.fileUrl,
+            createdAt: new Date().toISOString(),
+          };
 
-          console.log("Store result:", storeResult);
-          console.log("Store result data:", storeResult.data);
-          console.log("Data keys:", Object.keys(storeResult.data || {}));
-          console.log("Data stringified:", JSON.stringify(storeResult.data));
-          console.log("Store result ID:", storeResult.data?.id);
+          // Store in sessionStorage for the summary page
+          sessionStorage.setItem("currentSummary", JSON.stringify(summaryData));
 
-          toast.success("PDF summary stored successfully!", {
-            id: "saveSummary",
-          });
           setSelectedFile(null);
           if (fileInputRef.current) {
-            setIsUploading(false);
             fileInputRef.current.value = ""; // Reset file input
           }
 
-          // Redirect to the summary page or handle it as needed
-          router.push(`/summaries/${storeResult.data?.id}`);
+          // Encode data and pass via URL
+          const encodedData = encodeURIComponent(JSON.stringify(summaryData));
+
+          toast.success("Redirecting to summary...", {
+            id: "saveSummary",
+          });
+
+          // Redirect to the summary display page
+          router.push(`/summary?data=${encodedData}`);
+        } else {
+          toast.error("No summary data generated", { id: summaryToastId });
         }
+      } catch (error) {
+        console.error("Error generating PDF summary:", error);
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : "Failed to generate PDF summary. Please try again.",
+          { id: summaryToastId }
+        );
       }
     } catch (error) {
-      console.error("Error generating PDF summary:", error);
-      toast.error("Failed to generate PDF summary. Please try again.", {
-        id: summaryToastId,
-      });
+      console.error("Error during upload:", error);
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Upload failed. Please try again."
+      );
     } finally {
       setIsUploading(false);
     }
