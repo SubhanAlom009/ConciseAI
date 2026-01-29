@@ -114,9 +114,12 @@ export async function savePdfSummary({
     };
   } catch (error: any) {
     console.error("Error saving PDF summary:", error);
+    console.error("Error name:", error?.name);
+    console.error("Error message:", error?.message);
+    console.error("Error code:", error?.code);
     return {
       success: false,
-      message: "Failed to save PDF summary.",
+      message: error?.message || "Failed to save PDF summary.",
       data: null,
     };
   }
@@ -137,10 +140,11 @@ export async function storePdfSummary({
       summary,
     });
 
-    if (!savedPdfSummary) {
+    if (!savedPdfSummary.success || !savedPdfSummary.data) {
       return {
         success: false,
-        message: "Failed to save PDF summary.",
+        message: savedPdfSummary.message || "Failed to save PDF summary.",
+        data: null,
       };
     }
 
